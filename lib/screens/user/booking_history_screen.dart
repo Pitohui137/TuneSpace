@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../models/booking.dart';
 import '../../services/booking_service.dart';
@@ -39,6 +40,11 @@ class _BookingHistoryScreenState extends State<BookingHistoryScreen> {
     }
   }
 
+  Future<void> _openProof(String url) async {
+    final uri = Uri.parse(url);
+    await launchUrl(uri);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -54,8 +60,22 @@ class _BookingHistoryScreenState extends State<BookingHistoryScreen> {
                   onRefresh: _loadBookings,
                   child: ListView.builder(
                     itemCount: _bookings.length,
-                    itemBuilder: (context, index) =>
-                        BookingCard(booking: _bookings[index]),
+                    itemBuilder: (context, index) {
+                      final booking = _bookings[index];
+                      return BookingCard(
+                        booking: booking,
+                        footer: booking.hasPaymentProof
+                            ? Align(
+                                alignment: Alignment.centerLeft,
+                                child: TextButton.icon(
+                                  onPressed: () => _openProof(booking.paymentProofUrl!),
+                                  icon: const Icon(Icons.receipt_long),
+                                  label: const Text('Lihat Bukti Pembayaran'),
+                                ),
+                              )
+                            : null,
+                      );
+                    },
                   ),
                 ),
     );

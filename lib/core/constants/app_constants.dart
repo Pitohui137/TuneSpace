@@ -1,5 +1,7 @@
 class AppConstants {
   static const String appName = 'TuneSpace';
+  static const int openingHour = 8;
+  static const int closingHour = 21;
 
   static const List<String> bookingStatuses = [
     'menunggu',
@@ -22,4 +24,9 @@ class AppConstants {
         return status;
     }
   }
+
+  static List<String> get studioHourSlots => List.generate(
+        closingHour - openingHour,
+        (index) => '${(openingHour + index).toString().padLeft(2, '0')}:00',
+      );
 }

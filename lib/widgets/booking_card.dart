@@ -10,11 +10,13 @@ class BookingCard extends StatelessWidget {
     required this.booking,
     this.onTap,
     this.showUser = false,
+    this.footer,
   });
 
   final Booking booking;
   final VoidCallback? onTap;
   final bool showUser;
+  final Widget? footer;
 
   Color _statusColor(String status) {
     switch (status) {
@@ -102,6 +104,48 @@ class BookingCard extends StatelessWidget {
                   fontSize: 15,
                 ),
               ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: booking.hasPaymentProof
+                      ? Colors.green.shade50
+                      : Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      booking.hasPaymentProof
+                          ? Icons.verified_outlined
+                          : Icons.upload_file_outlined,
+                      size: 18,
+                      color: booking.hasPaymentProof
+                          ? Colors.green.shade700
+                          : Colors.orange.shade800,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        booking.hasPaymentProof
+                            ? 'Bukti pembayaran sudah diunggah'
+                            : 'Bukti pembayaran belum diunggah',
+                        style: TextStyle(
+                          color: booking.hasPaymentProof
+                              ? Colors.green.shade800
+                              : Colors.orange.shade900,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (footer != null) ...[
+                const SizedBox(height: 12),
+                footer!,
+              ],
             ],
           ),
         ),

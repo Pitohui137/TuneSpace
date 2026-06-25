@@ -1,10 +1,15 @@
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/constants/app_constants.dart';
 import '../../models/booking.dart';
 import '../../models/studio.dart';
+import '../../models/studio_availability.dart';
 import '../../services/booking_service.dart';
 import '../../services/studio_service.dart';
 import '../../widgets/loading_widget.dart';
@@ -26,13 +31,14 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
   Studio? _studio;
   bool _isLoading = true;
   bool _isSubmitting = false;
+  String? _errorMessage;
 
   DateTime _tanggal = DateTime.now().add(const Duration(days: 1));
-  TimeOfDay _jamMulai = const TimeOfDay(hour: 9, minute: 0);
+  String? _selectedJamMulai;
   int _durasiJam = 1;
-
-  static const _jamOptions = ['08:00', '09:00', '10:00', '11:00', '12:00',
-      '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00'];
+  List<StudioAvailability> _availability = const [];
+  Uint8List? _paymentBytes;
+  String? _paymentFileName;
 
   @override
   void initState() {
@@ -41,12 +47,29 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
   }
 
   Future<void> _loadStudio() async {
-    final studio = await _studioService.getStudio(widget.studioId);
-    if (mounted) {
-      setState(() {
-        _studio = studio;
-        _isLoading = false;
-      });
+    try {
+      final studio = await _studioService.getStudio(widget.studioId);
+      final availability = await _bookingService.getStudioAvailability(
+        studioId: widget.studioId,
+        startDate: DateTime.now(),
+        endDate: DateTime.now().add(const Duration(days: 60)),
+      );
+
+      if (mounted) {
+        setState(() {
+          _studio = studio;
+          _availability = availability;
+          _selectedJamMulai = _availableSlotsFor(_tanggal).firstOrNull;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = e.toString();
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -56,47 +79,98 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
     return studio.hargaPerJam * _durasiJam;
   }
 
-  Future<void> _pickDate() async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _tanggal,
-      firstDate: DateTime.now(),
-      lastDate: DateTime.now().add(const Duration(days: 90)),
-      locale: const Locale('id', 'ID'),
+  List<String> _availableSlotsFor(DateTime date) {
+    final bookedHours = <int>{};
+    final dayEntries = _availability.where((entry) => _isSameDate(entry.date, date));
+
+    for (final entry in dayEntries) {
+      final startHour = int.tryParse(entry.startTime.split(':').first) ?? 0;
+      for (var hour = startHour; hour < startHour + entry.durationHours; hour++) {
+        bookedHours.add(hour);
+      }
+    }
+
+    return AppConstants.studioHourSlots.where((slot) {
+      final hour = int.parse(slot.split(':').first);
+      final requestedHours =
+          List.generate(_durasiJam, (index) => hour + index, growable: false);
+
+      final closesAfterHours = requestedHours.any(
+        (value) => value >= AppConstants.closingHour,
+      );
+      if (closesAfterHours) return false;
+
+      return requestedHours.every((value) => !bookedHours.contains(value));
+    }).toList();
+  }
+
+  bool _isSameDate(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  bool _isFullyBooked(DateTime date) => _availableSlotsFor(date).isEmpty;
+
+  Future<void> _pickPaymentProof() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['jpg', 'jpeg', 'png', 'pdf'],
+      withData: true,
     );
-    if (picked != null) setState(() => _tanggal = picked);
+
+    if (result == null || result.files.single.bytes == null) return;
+
+    setState(() {
+      _paymentBytes = result.files.single.bytes!;
+      _paymentFileName = result.files.single.name;
+    });
   }
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
     final userId = Supabase.instance.client.auth.currentUser?.id;
-    if (userId == null) return;
+    if (userId == null || _selectedJamMulai == null) return;
 
     setState(() => _isSubmitting = true);
 
     try {
-      final jamStr =
-          '${_jamMulai.hour.toString().padLeft(2, '0')}:${_jamMulai.minute.toString().padLeft(2, '0')}';
-
-      final booking = Booking(
+      final bookingDraft = Booking(
         id: '',
         userId: userId,
         studioId: widget.studioId,
         tanggalBooking: _tanggal,
-        jamMulai: jamStr,
+        jamMulai: _selectedJamMulai!,
         durasiJam: _durasiJam,
         totalHarga: _totalHarga,
         status: 'menunggu',
         createdAt: DateTime.now(),
       );
 
-      await _bookingService.createBooking(booking);
+      var booking = await _bookingService.createBooking(bookingDraft);
+
+      if (_paymentBytes != null && _paymentFileName != null) {
+        final publicUrl = await _bookingService.uploadPaymentProof(
+          bookingId: booking.id,
+          fileName: _paymentFileName!,
+          bytes: _paymentBytes!,
+        );
+        booking = await _bookingService.attachPaymentProof(
+          bookingId: booking.id,
+          publicUrl: publicUrl,
+          fileName: _paymentFileName!,
+        );
+      }
 
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Booking berhasil dikirim!')),
+        SnackBar(
+          content: Text(
+            booking.hasPaymentProof
+                ? 'Booking dan bukti pembayaran berhasil dikirim.'
+                : 'Booking berhasil dikirim.',
+          ),
+        ),
       );
       context.go('/user/status');
     } catch (e) {
@@ -116,6 +190,13 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
       return const Scaffold(body: LoadingWidget());
     }
 
+    if (_errorMessage != null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Booking Studio')),
+        body: Center(child: Text('Gagal memuat data: $_errorMessage')),
+      );
+    }
+
     final studio = _studio;
     if (studio == null) {
       return Scaffold(
@@ -126,6 +207,11 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
 
     final currency = NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
     final dateFormat = DateFormat('dd MMMM yyyy', 'id_ID');
+    final availableSlots = _availableSlotsFor(_tanggal);
+
+    if (_selectedJamMulai != null && !availableSlots.contains(_selectedJamMulai)) {
+      _selectedJamMulai = availableSlots.firstOrNull;
+    }
 
     return Scaffold(
       appBar: AppBar(title: const Text('Booking Studio')),
@@ -136,35 +222,123 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                studio.namaStudio,
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Theme.of(context).colorScheme.primary,
+                      Theme.of(context).colorScheme.secondary,
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      studio.namaStudio,
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '${currency.format(studio.hargaPerJam)}/jam',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(height: 24),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Tanggal Booking'),
-                subtitle: Text(dateFormat.format(_tanggal)),
-                trailing: const Icon(Icons.calendar_today),
-                onTap: _pickDate,
+              Text(
+                'Kalender Ketersediaan Studio',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
               ),
-              const Divider(),
+              const SizedBox(height: 12),
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.05),
+                      blurRadius: 20,
+                      offset: const Offset(0, 10),
+                    ),
+                  ],
+                ),
+                child: CalendarDatePicker(
+                  initialDate: _tanggal,
+                  firstDate: DateTime.now(),
+                  lastDate: DateTime.now().add(const Duration(days: 60)),
+                  onDateChanged: (value) {
+                    setState(() {
+                      _tanggal = value;
+                      _selectedJamMulai = _availableSlotsFor(value).firstOrNull;
+                    });
+                  },
+                ),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  _LegendChip(
+                    color: Colors.green.shade100,
+                    label: 'Tersedia',
+                    textColor: Colors.green.shade800,
+                  ),
+                  _LegendChip(
+                    color: Colors.red.shade100,
+                    label: 'Penuh',
+                    textColor: Colors.red.shade800,
+                  ),
+                  _LegendChip(
+                    color: Colors.blue.shade100,
+                    label: dateFormat.format(_tanggal),
+                    textColor: Colors.blue.shade800,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+              Text(
+                _isFullyBooked(_tanggal)
+                    ? 'Tanggal ini penuh. Silakan pilih tanggal lain.'
+                    : 'Jam tersedia pada ${dateFormat.format(_tanggal)}',
+                style: TextStyle(
+                  color: _isFullyBooked(_tanggal)
+                      ? Colors.red.shade700
+                      : Colors.grey.shade700,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                initialValue:
-                    '${_jamMulai.hour.toString().padLeft(2, '0')}:${_jamMulai.minute.toString().padLeft(2, '0')}',
+                initialValue: _selectedJamMulai,
                 decoration: const InputDecoration(labelText: 'Jam Mulai'),
-                items: _jamOptions
+                items: availableSlots
                     .map((j) => DropdownMenuItem(value: j, child: Text(j)))
                     .toList(),
-                onChanged: (v) {
-                  if (v == null) return;
-                  final parts = v.split(':');
-                  setState(() {
-                    _jamMulai = TimeOfDay(
-                      hour: int.parse(parts[0]),
-                      minute: int.parse(parts[1]),
-                    );
-                  });
+                onChanged: availableSlots.isEmpty
+                    ? null
+                    : (v) => setState(() => _selectedJamMulai = v),
+                validator: (value) {
+                  if (availableSlots.isNotEmpty && (value == null || value.isEmpty)) {
+                    return 'Pilih jam mulai';
+                  }
+                  return null;
                 },
               ),
               const SizedBox(height: 16),
@@ -176,7 +350,12 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
                   (i) => DropdownMenuItem(value: i + 1, child: Text('${i + 1} jam')),
                 ),
                 onChanged: (v) {
-                  if (v != null) setState(() => _durasiJam = v);
+                  if (v != null) {
+                    setState(() {
+                      _durasiJam = v;
+                      _selectedJamMulai = _availableSlotsFor(_tanggal).firstOrNull;
+                    });
+                  }
                 },
               ),
               const SizedBox(height: 24),
@@ -202,11 +381,51 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
                   ],
                 ),
               ),
+              const SizedBox(height: 24),
+              OutlinedButton.icon(
+                onPressed: _pickPaymentProof,
+                icon: const Icon(Icons.upload_file),
+                label: Text(
+                  _paymentFileName == null
+                      ? 'Upload Bukti Pembayaran'
+                      : 'Ganti Bukti Pembayaran',
+                ),
+              ),
+              if (_paymentFileName != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.grey.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.receipt_long),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          _paymentFileName!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 8),
+              Text(
+                'Format yang didukung: JPG, PNG, atau PDF.',
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+              ),
               const SizedBox(height: 32),
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: _isSubmitting ? null : _submit,
+                  onPressed: _isSubmitting || availableSlots.isEmpty ? null : _submit,
                   child: _isSubmitting
                       ? const SizedBox(
                           height: 20,
@@ -218,6 +437,37 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LegendChip extends StatelessWidget {
+  const _LegendChip({
+    required this.color,
+    required this.label,
+    required this.textColor,
+  });
+
+  final Color color;
+  final String label;
+  final Color textColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: textColor,
+          fontWeight: FontWeight.w600,
+          fontSize: 12,
         ),
       ),
     );

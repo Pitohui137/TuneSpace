@@ -25,6 +25,14 @@ CREATE TABLE IF NOT EXISTS public.studios (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS public.studio_photos (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  studio_id   UUID NOT NULL REFERENCES public.studios(id) ON DELETE CASCADE,
+  photo_url   TEXT NOT NULL,
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- 3. Tabel bookings
 CREATE TABLE IF NOT EXISTS public.bookings (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -34,10 +42,18 @@ CREATE TABLE IF NOT EXISTS public.bookings (
   jam_mulai       TIME NOT NULL,
   durasi_jam      INTEGER NOT NULL CHECK (durasi_jam > 0),
   total_harga     NUMERIC(12, 2) NOT NULL CHECK (total_harga >= 0),
+  payment_proof_url TEXT,
+  payment_file_name TEXT,
+  payment_uploaded_at TIMESTAMPTZ,
   status          TEXT NOT NULL DEFAULT 'menunggu'
                   CHECK (status IN ('menunggu', 'disetujui', 'ditolak', 'selesai')),
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE public.bookings
+  ADD COLUMN IF NOT EXISTS payment_proof_url TEXT,
+  ADD COLUMN IF NOT EXISTS payment_file_name TEXT,
+  ADD COLUMN IF NOT EXISTS payment_uploaded_at TIMESTAMPTZ;
 
 -- 4. Trigger: buat profil otomatis saat user mendaftar
 CREATE OR REPLACE FUNCTION public.handle_new_user()
@@ -82,6 +98,7 @@ $$;
 ALTER TABLE public.profiles  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.studios   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.bookings  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.studio_photos ENABLE ROW LEVEL SECURITY;
 
 -- ---- profiles policies ----
 DROP POLICY IF EXISTS "profiles_select_own_or_admin" ON public.profiles;
@@ -118,6 +135,22 @@ DROP POLICY IF EXISTS "studios_delete_admin" ON public.studios;
 CREATE POLICY "studios_delete_admin" ON public.studios
   FOR DELETE USING (public.is_admin());
 
+DROP POLICY IF EXISTS "studio_photos_select_all" ON public.studio_photos;
+CREATE POLICY "studio_photos_select_all" ON public.studio_photos
+  FOR SELECT USING (auth.role() = 'authenticated');
+
+DROP POLICY IF EXISTS "studio_photos_insert_admin" ON public.studio_photos;
+CREATE POLICY "studio_photos_insert_admin" ON public.studio_photos
+  FOR INSERT WITH CHECK (public.is_admin());
+
+DROP POLICY IF EXISTS "studio_photos_update_admin" ON public.studio_photos;
+CREATE POLICY "studio_photos_update_admin" ON public.studio_photos
+  FOR UPDATE USING (public.is_admin());
+
+DROP POLICY IF EXISTS "studio_photos_delete_admin" ON public.studio_photos;
+CREATE POLICY "studio_photos_delete_admin" ON public.studio_photos
+  FOR DELETE USING (public.is_admin());
+
 -- ---- bookings policies ----
 DROP POLICY IF EXISTS "bookings_select_own_or_admin" ON public.bookings;
 CREATE POLICY "bookings_select_own_or_admin" ON public.bookings
@@ -135,7 +168,111 @@ DROP POLICY IF EXISTS "bookings_delete_admin" ON public.bookings;
 CREATE POLICY "bookings_delete_admin" ON public.bookings
   FOR DELETE USING (public.is_admin());
 
--- 7. Data contoh studio (opsional)
+-- 7. RPC: data slot booking untuk kalender ketersediaan
+CREATE OR REPLACE FUNCTION public.get_studio_booked_slots(
+  studio_uuid UUID,
+  start_date DATE,
+  end_date DATE
+)
+RETURNS TABLE (
+  tanggal_booking DATE,
+  jam_mulai TIME,
+  durasi_jam INTEGER,
+  status TEXT
+)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+  SELECT
+    b.tanggal_booking,
+    b.jam_mulai,
+    b.durasi_jam,
+    b.status
+  FROM public.bookings b
+  WHERE b.studio_id = studio_uuid
+    AND b.tanggal_booking BETWEEN start_date AND end_date
+    AND b.status IN ('menunggu', 'disetujui');
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_studio_booked_slots(UUID, DATE, DATE) TO authenticated;
+
+-- 8. Storage bucket bukti pembayaran
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('payment-proofs', 'payment-proofs', true)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('studio-photos', 'studio-photos', true)
+ON CONFLICT (id) DO NOTHING;
+
+DROP POLICY IF EXISTS "payment_proofs_select_authenticated" ON storage.objects;
+CREATE POLICY "payment_proofs_select_authenticated" ON storage.objects
+  FOR SELECT TO authenticated
+  USING (bucket_id = 'payment-proofs');
+
+DROP POLICY IF EXISTS "payment_proofs_insert_authenticated" ON storage.objects;
+CREATE POLICY "payment_proofs_insert_authenticated" ON storage.objects
+  FOR INSERT TO authenticated
+  WITH CHECK (bucket_id = 'payment-proofs');
+
+DROP POLICY IF EXISTS "payment_proofs_update_authenticated" ON storage.objects;
+CREATE POLICY "payment_proofs_update_authenticated" ON storage.objects
+  FOR UPDATE TO authenticated
+  USING (bucket_id = 'payment-proofs')
+  WITH CHECK (bucket_id = 'payment-proofs');
+
+DROP POLICY IF EXISTS "studio_photos_select_authenticated" ON storage.objects;
+CREATE POLICY "studio_photos_select_authenticated" ON storage.objects
+  FOR SELECT TO authenticated
+  USING (bucket_id = 'studio-photos');
+
+DROP POLICY IF EXISTS "studio_photos_insert_admin" ON storage.objects;
+CREATE POLICY "studio_photos_insert_admin" ON storage.objects
+  FOR INSERT TO authenticated
+  WITH CHECK (bucket_id = 'studio-photos' AND public.is_admin());
+
+DROP POLICY IF EXISTS "studio_photos_update_admin" ON storage.objects;
+CREATE POLICY "studio_photos_update_admin" ON storage.objects
+  FOR UPDATE TO authenticated
+  USING (bucket_id = 'studio-photos' AND public.is_admin())
+  WITH CHECK (bucket_id = 'studio-photos' AND public.is_admin());
+
+-- 9. RPC: simpan URL bukti pembayaran pada booking milik user
+CREATE OR REPLACE FUNCTION public.attach_payment_proof(
+  booking_uuid UUID,
+  proof_url TEXT,
+  file_name TEXT
+)
+RETURNS public.bookings
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  updated_booking public.bookings;
+BEGIN
+  UPDATE public.bookings
+  SET
+    payment_proof_url = proof_url,
+    payment_file_name = file_name,
+    payment_uploaded_at = NOW()
+  WHERE id = booking_uuid
+    AND user_id = auth.uid()
+  RETURNING * INTO updated_booking;
+
+  IF updated_booking.id IS NULL THEN
+    RAISE EXCEPTION 'Booking tidak ditemukan atau tidak memiliki akses';
+  END IF;
+
+  RETURN updated_booking;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.attach_payment_proof(UUID, TEXT, TEXT) TO authenticated;
+
+-- 10. Data contoh studio (opsional)
 INSERT INTO public.studios (nama_studio, deskripsi, fasilitas, harga_per_jam, foto_url)
 VALUES
   (
@@ -161,7 +298,7 @@ VALUES
   )
 ON CONFLICT DO NOTHING;
 
--- 8. Cara membuat akun Admin:
+-- 11. Cara membuat akun Admin:
 --    a) Daftar akun biasa lewat aplikasi
 --    b) Jalankan query berikut (ganti email):
 --

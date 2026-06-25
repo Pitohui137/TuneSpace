@@ -1,3 +1,4 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -26,6 +27,9 @@ class _AdminStudioFormScreenState extends State<AdminStudioFormScreen> {
   late final TextEditingController _fotoController;
 
   bool _isSubmitting = false;
+  Uint8List? _pickedPhotoBytes;
+  String? _pickedPhotoName;
+  final List<_GalleryPhotoDraft> _galleryDrafts = [];
   bool get _isEdit => widget.studio != null;
 
   @override
@@ -39,6 +43,16 @@ class _AdminStudioFormScreenState extends State<AdminStudioFormScreen> {
       text: s != null ? s.hargaPerJam.toInt().toString() : '',
     );
     _fotoController = TextEditingController(text: s?.fotoUrl ?? '');
+    if (s != null) {
+      for (final photo in s.gallery) {
+        _galleryDrafts.add(
+          _GalleryPhotoDraft(
+            fileName: 'existing-${photo.id}',
+            existingUrl: photo.photoUrl,
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -57,6 +71,17 @@ class _AdminStudioFormScreenState extends State<AdminStudioFormScreen> {
     setState(() => _isSubmitting = true);
 
     try {
+      var photoUrl = _fotoController.text.trim().isEmpty
+          ? null
+          : _fotoController.text.trim();
+
+      if (_pickedPhotoBytes != null && _pickedPhotoName != null) {
+        photoUrl = await _studioService.uploadStudioPhoto(
+          fileName: _pickedPhotoName!,
+          bytes: _pickedPhotoBytes!,
+        );
+      }
+
       final studio = Studio(
         id: widget.studio?.id ?? '',
         namaStudio: _namaController.text.trim(),
@@ -67,17 +92,37 @@ class _AdminStudioFormScreenState extends State<AdminStudioFormScreen> {
             ? null
             : _fasilitasController.text.trim(),
         hargaPerJam: double.parse(_hargaController.text.trim()),
-        fotoUrl: _fotoController.text.trim().isEmpty
-            ? null
-            : _fotoController.text.trim(),
+        fotoUrl: photoUrl,
         createdAt: widget.studio?.createdAt ?? DateTime.now(),
       );
 
+      final savedStudio = _isEdit
+          ? studio
+          : await _studioService.createStudio(studio);
+
       if (_isEdit) {
         await _studioService.updateStudio(widget.studio!.id, studio);
-      } else {
-        await _studioService.createStudio(studio);
       }
+
+      final targetStudioId = _isEdit ? widget.studio!.id : savedStudio.id;
+      final galleryUrls = <String>[];
+      for (final draft in _galleryDrafts) {
+        if (draft.existingUrl != null) {
+          galleryUrls.add(draft.existingUrl!);
+          continue;
+        }
+        if (draft.bytes != null) {
+          final uploadedUrl = await _studioService.uploadStudioPhoto(
+            fileName: draft.fileName,
+            bytes: draft.bytes!,
+          );
+          galleryUrls.add(uploadedUrl);
+        }
+      }
+      await _studioService.replaceStudioGallery(
+        studioId: targetStudioId,
+        photoUrls: galleryUrls,
+      );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -98,8 +143,53 @@ class _AdminStudioFormScreenState extends State<AdminStudioFormScreen> {
     }
   }
 
+  Future<void> _pickPhoto() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      withData: true,
+    );
+
+    if (result == null || result.files.single.bytes == null) return;
+
+    setState(() {
+      _pickedPhotoBytes = result.files.single.bytes;
+      _pickedPhotoName = result.files.single.name;
+      _fotoController.text = '';
+    });
+  }
+
+  Future<void> _pickGalleryPhotos() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      withData: true,
+      allowMultiple: true,
+    );
+
+    if (result == null) return;
+
+    final newDrafts = result.files
+        .where((file) => file.bytes != null)
+        .map(
+          (file) => _GalleryPhotoDraft(
+            fileName: file.name,
+            bytes: file.bytes,
+          ),
+        )
+        .toList();
+
+    if (newDrafts.isEmpty) return;
+
+    setState(() {
+      _galleryDrafts.addAll(newDrafts);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    final previewUrl = _fotoController.text.trim().isEmpty
+        ? widget.studio?.fotoUrl
+        : _fotoController.text.trim();
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_isEdit ? 'Edit Studio' : 'Tambah Studio'),
@@ -110,6 +200,179 @@ class _AdminStudioFormScreenState extends State<AdminStudioFormScreen> {
           key: _formKey,
           child: Column(
             children: [
+              Container(
+                width: double.infinity,
+                height: 220,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(24),
+                  color: Colors.grey.shade100,
+                  image: _pickedPhotoBytes != null
+                      ? DecorationImage(
+                          image: MemoryImage(_pickedPhotoBytes!),
+                          fit: BoxFit.cover,
+                        )
+                      : (previewUrl != null && previewUrl.isNotEmpty)
+                          ? DecorationImage(
+                              image: NetworkImage(previewUrl),
+                              fit: BoxFit.cover,
+                            )
+                          : null,
+                ),
+                child: _pickedPhotoBytes == null &&
+                        (previewUrl == null || previewUrl.isEmpty)
+                    ? Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.photo_camera_back_outlined,
+                              size: 42,
+                              color: Colors.grey.shade500,
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              'Belum ada foto ruangan studio',
+                              style: TextStyle(color: Colors.grey.shade600),
+                            ),
+                          ],
+                        ),
+                      )
+                    : Align(
+                        alignment: Alignment.topRight,
+                        child: Container(
+                          margin: const EdgeInsets.all(12),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.45),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: const Text(
+                            'Preview',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _isSubmitting ? null : _pickPhoto,
+                      icon: const Icon(Icons.add_a_photo_outlined),
+                      label: Text(
+                        _pickedPhotoName == null ? 'Upload Foto' : 'Ganti Foto',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (_pickedPhotoName != null) ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'File dipilih: $_pickedPhotoName',
+                    style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Galeri Ruangan Studio',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _isSubmitting ? null : _pickGalleryPhotos,
+                      icon: const Icon(Icons.collections_outlined),
+                      label: const Text('Tambah Beberapa Foto'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (_galleryDrafts.isEmpty)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: Colors.grey.shade200),
+                  ),
+                  child: Text(
+                    'Belum ada foto galeri tambahan.',
+                    style: TextStyle(color: Colors.grey.shade600),
+                  ),
+                )
+              else
+                SizedBox(
+                  height: 110,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: _galleryDrafts.length,
+                    separatorBuilder: (context, index) => const SizedBox(width: 12),
+                    itemBuilder: (context, index) {
+                      final draft = _galleryDrafts[index];
+                      return Stack(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(18),
+                            child: SizedBox(
+                              width: 140,
+                              height: 110,
+                              child: draft.bytes != null
+                                  ? Image.memory(draft.bytes!, fit: BoxFit.cover)
+                                  : Image.network(
+                                      draft.existingUrl!,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (context, error, stackTrace) => Container(
+                                        color: Colors.grey.shade200,
+                                        child: const Icon(Icons.broken_image_outlined),
+                                      ),
+                                    ),
+                            ),
+                          ),
+                          Positioned(
+                            top: 8,
+                            right: 8,
+                            child: InkWell(
+                              onTap: () => setState(() => _galleryDrafts.removeAt(index)),
+                              child: Container(
+                                padding: const EdgeInsets.all(6),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.55),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: const Icon(
+                                  Icons.close,
+                                  color: Colors.white,
+                                  size: 16,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              const SizedBox(height: 16),
               TextFormField(
                 controller: _namaController,
                 decoration: const InputDecoration(labelText: 'Nama Studio'),
@@ -146,8 +409,9 @@ class _AdminStudioFormScreenState extends State<AdminStudioFormScreen> {
               const SizedBox(height: 16),
               TextFormField(
                 controller: _fotoController,
+                onChanged: (_) => setState(() {}),
                 decoration: const InputDecoration(
-                  labelText: 'URL Foto (opsional)',
+                  labelText: 'URL Foto (opsional, jika tidak upload file)',
                 ),
               ),
               const SizedBox(height: 32),
@@ -170,4 +434,16 @@ class _AdminStudioFormScreenState extends State<AdminStudioFormScreen> {
       ),
     );
   }
+}
+
+class _GalleryPhotoDraft {
+  const _GalleryPhotoDraft({
+    required this.fileName,
+    this.bytes,
+    this.existingUrl,
+  });
+
+  final String fileName;
+  final Uint8List? bytes;
+  final String? existingUrl;
 }

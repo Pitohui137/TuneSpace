@@ -65,15 +65,49 @@ class _StudioListScreenState extends State<StudioListScreen> {
                     )
                   : RefreshIndicator(
                       onRefresh: _loadStudios,
-                      child: ListView.builder(
-                        itemCount: _studios.length,
-                        itemBuilder: (context, index) {
-                          final studio = _studios[index];
-                          return StudioCard(
-                            studio: studio,
-                            onTap: () => context.push('/user/studio/${studio.id}'),
-                          );
-                        },
+                      child: ListView(
+                        children: [
+                          Container(
+                            margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                            padding: const EdgeInsets.all(20),
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  Theme.of(context).colorScheme.secondary,
+                                  Theme.of(context).colorScheme.primary,
+                                ],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              borderRadius: BorderRadius.circular(28),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Temukan Studio Favoritmu',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  '${_studios.length} studio siap dipesan hari ini.',
+                                  style: const TextStyle(color: Colors.white70),
+                                ),
+                              ],
+                            ),
+                          ),
+                          ..._studios.map(
+                            (studio) => StudioCard(
+                              studio: studio,
+                              onTap: () => context.push('/user/studio/${studio.id}'),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                        ],
                       ),
                     ),
     );

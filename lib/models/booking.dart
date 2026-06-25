@@ -12,6 +12,9 @@ class Booking {
     required this.totalHarga,
     required this.status,
     required this.createdAt,
+    this.paymentProofUrl,
+    this.paymentFileName,
+    this.paymentUploadedAt,
     this.studio,
     this.profile,
   });
@@ -25,8 +28,13 @@ class Booking {
   final double totalHarga;
   final String status;
   final DateTime createdAt;
+  final String? paymentProofUrl;
+  final String? paymentFileName;
+  final DateTime? paymentUploadedAt;
   final Studio? studio;
   final Profile? profile;
+
+  bool get hasPaymentProof => paymentProofUrl != null && paymentProofUrl!.isNotEmpty;
 
   factory Booking.fromJson(Map<String, dynamic> json) {
     return Booking(
@@ -39,6 +47,11 @@ class Booking {
       totalHarga: (json['total_harga'] as num).toDouble(),
       status: json['status'] as String,
       createdAt: DateTime.parse(json['created_at'] as String),
+      paymentProofUrl: json['payment_proof_url'] as String?,
+      paymentFileName: json['payment_file_name'] as String?,
+      paymentUploadedAt: json['payment_uploaded_at'] != null
+          ? DateTime.parse(json['payment_uploaded_at'] as String)
+          : null,
       studio: json['studios'] != null
           ? Studio.fromJson(json['studios'] as Map<String, dynamic>)
           : null,
@@ -64,5 +77,7 @@ class Booking {
         'durasi_jam': durasiJam,
         'total_harga': totalHarga,
         'status': status,
+        'payment_proof_url': paymentProofUrl,
+        'payment_file_name': paymentFileName,
       };
 }

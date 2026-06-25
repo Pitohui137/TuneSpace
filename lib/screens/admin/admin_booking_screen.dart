@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../models/booking.dart';
@@ -56,6 +57,11 @@ class _AdminBookingScreenState extends State<AdminBookingScreen> {
         );
       }
     }
+  }
+
+  Future<void> _openProof(String url) async {
+    final uri = Uri.parse(url);
+    await launchUrl(uri);
   }
 
   void _showActionSheet(Booking booking) {
@@ -125,6 +131,16 @@ class _AdminBookingScreenState extends State<AdminBookingScreen> {
                         booking: booking,
                         showUser: true,
                         onTap: () => _showActionSheet(booking),
+                        footer: booking.hasPaymentProof
+                            ? Align(
+                                alignment: Alignment.centerLeft,
+                                child: TextButton.icon(
+                                  onPressed: () => _openProof(booking.paymentProofUrl!),
+                                  icon: const Icon(Icons.visibility),
+                                  label: const Text('Lihat Bukti Pembayaran'),
+                                ),
+                              )
+                            : null,
                       );
                     },
                   ),
