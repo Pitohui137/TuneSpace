@@ -1,22 +1,27 @@
 # TuneSpace
 
-TuneSpace is a Flutter booking app for music studios. The app helps users find studio spaces, make bookings, upload payment proof, and track booking status in one place.
+TuneSpace adalah aplikasi Flutter untuk booking studio musik. Aplikasi ini membantu pengguna menemukan studio, melakukan pemesanan, mengunggah bukti pembayaran, dan memantau status booking dalam satu tempat.
 
-## Features
+## Fitur
 
-- Browse available studios with pricing and details
-- Book studio sessions by selecting date, time, and duration
-- Upload payment proof directly from the app
-- View booking status and history
-- Separate experience for admin users and normal users
+- Menelusuri daftar studio dengan informasi harga dan fasilitas
+- Memesan sesi studio berdasarkan tanggal, waktu, dan durasi
+- Mengunggah bukti pembayaran langsung dari aplikasi
+- Melihat status booking aktif dan riwayat pemesanan
+- Pengalaman terpisah untuk pengguna biasa dan admin
 
-## Run the app
+## Cara Menjalankan
 
-1. Install Flutter and required tools.
-2. Open the project in your IDE.
-3. Run `flutter pub get`.
-4. Start the app with `flutter run`.
+1. Install Flutter dan semua tools yang dibutuhkan.
+2. Buka proyek di IDE.
+3. Jalankan `flutter pub get`.
+4. Jalankan aplikasi dengan `flutter run`.
 
-## Notes
+## Catatan
 
-The app uses Supabase for authentication, profile management, and booking storage. Make sure the Supabase configuration in `lib/core/config/supabase_config.dart` is set correctly before running.
+Aplikasi ini menggunakan Supabase untuk otentikasi, manajemen profil, dan penyimpanan booking. Pastikan konfigurasi Supabase di `lib/core/config/supabase_config.dart` sudah benar sebelum dijalankan.
+
+## Penulis
+
+- Nama: Abyan Farhan MA1
+- Peran: Pengembang aplikasi TuneSpace
