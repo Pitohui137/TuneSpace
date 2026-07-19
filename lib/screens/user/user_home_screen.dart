@@ -98,6 +98,7 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
                     initials: initials,
                     activeCount: _activeCount,
                     onTap: () => context.push('/user/status'),
+                    onLogout: _logout,
                   ),
                   const SizedBox(height: 18),
                   _SearchBar(onTap: () => context.push('/user/studios')),
@@ -171,6 +172,7 @@ class _HeroSection extends StatelessWidget {
     required this.initials,
     required this.activeCount,
     required this.onTap,
+    required this.onLogout,
   });
 
   final String greeting;
@@ -178,6 +180,7 @@ class _HeroSection extends StatelessWidget {
   final String initials;
   final int activeCount;
   final VoidCallback onTap;
+  final VoidCallback onLogout;
 
   @override
   Widget build(BuildContext context) {
@@ -220,14 +223,28 @@ class _HeroSection extends StatelessWidget {
                   ],
                 ),
               ),
-              ElevatedButton(
-                onPressed: onTap,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: theme.colorScheme.primary,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                ),
-                child: const Text('Lihat Status'),
+              Column(
+                children: [
+                  ElevatedButton(
+                    onPressed: onTap,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: theme.colorScheme.primary,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    ),
+                    child: const Text('Lihat Status'),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton(
+                    onPressed: onLogout,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: BorderSide(color: Colors.white.withOpacity(0.6)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    ),
+                    child: const Text('Logout'),
+                  ),
+                ],
               ),
             ],
           ),
